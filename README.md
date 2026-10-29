@@ -19,6 +19,20 @@ export VLLM_ENABLE_V1_MULTIPROCESSING=0   # Evo2 sets this itself; the API needs
 
 `dtype="bfloat16"` is mandatory: Evo 2's residual stream reaches ~1e12, and fp16 gives NaN.
 
+### Check the install
+
+```bash
+python -m evo2_flash.test.test_evo2 --model_name evo2_7b
+```
+
+This is Evo 2's own correctness test (`python -m evo2.test.test_evo2`), run through
+evo2_flash. It scores four sequences and passes, with exit code 0, when the mean loss is
+within 1e-3 of the value the Evo 2 authors published. On one H100 the delta is 2.92e-4
+for `evo2_7b` and 4.96e-4 for `evo2_1b_base`. Each run takes about a minute once the
+checkpoint is converted. `--local_path` points it at a converted directory, and
+`--kv_cache_dtype fp8` checks the fp8 KV cache, with a tolerance of 5e-3 (H100,
+`evo2_7b`: 9.31e-4).
+
 ## Quick start
 
 ```python
@@ -181,3 +195,4 @@ as the L4, CFG sizes its admission waves to what the KV cache holds.
 - `evo2_flash/triton_hcl.py`: the fused modal-filter kernel, vendored from
   [Zymrael/vortex](https://github.com/Zymrael/vortex) (Apache-2.0).
 - `evo2_flash/evo2_configs/*.yml`: the model configs from evo2 0.6.0 (Apache-2.0).
+- `evo2_flash/test/data/prompts.csv`: evo2's test sequences (Apache-2.0).

@@ -18,8 +18,10 @@ dependencies = ["torch", "transformers", "safetensors", "numpy", "pyyaml", "hugg
 evo2_flash = "evo2_flash:register"
 
 [tool.setuptools]
-packages = ["evo2_flash"]
+packages = ["evo2_flash", "evo2_flash.test"]
 
 [tool.setuptools.package-data]
 # evo2's vortex config ymls (Apache-2.0), used to convert checkpoints on first use.
 evo2_flash = ["evo2_configs/*.yml"]
+# evo2's test sequences (Apache-2.0), for `python -m evo2_flash.test.test_evo2`.
+"evo2_flash.test" = ["data/*.csv"]
