@@ -14,9 +14,10 @@ Evo 2 (StripedHyena2) on vLLM, with a drop-in replacement for `evo2.Evo2`. Evo2_
 
 ```bash
 # vLLM 0.26.0, CUDA 12.9 build: runs on CUDA 12 and CUDA 13 drivers.
-# (PyPI's default vllm build is CUDA 13 and cannot use the GPU on a CUDA 12 driver.)
+# (PyPI's default vllm build is CUDA 13 and cannot use the GPU on a CUDA 12 driver;
+#  torchcodec is pinned because releases after 0.16 do not load with vLLM 0.26's torch.)
 pip install "https://github.com/vllm-project/vllm/releases/download/v0.26.0/vllm-0.26.0+cu129-cp38-abi3-manylinux_2_28_x86_64.whl" \
-    --extra-index-url https://download.pytorch.org/whl/cu129
+    "torchcodec==0.16.0" --extra-index-url https://download.pytorch.org/whl/cu129
 pip install evo2-flash   # registers the plugin via the vllm.general_plugins entry point
 export VLLM_ENABLE_V1_MULTIPROCESSING=0   # Evo2 sets this itself; the API needs the engine in-process
 ```
