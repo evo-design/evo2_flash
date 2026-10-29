@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evo2-flash"
+version = "0.1.0"
+description = "Evo 2 / StripedHyena2 on vLLM: an out-of-tree plugin with a drop-in evo2.Evo2 API"
+readme = "README.md"
+requires-python = ">=3.10"
+# vLLM is deliberately not listed: install vllm==0.26.0 (+cu129 wheel) yourself.
+# Resolving it from PyPI pulls the cu130 build, which fails on CUDA 12.x drivers.
+dependencies = ["torch", "transformers", "safetensors", "numpy", "pyyaml", "huggingface_hub"]
+
+# Registers the model with vLLM automatically on engine startup. Without an
+# install, call evo2_flash.register() before constructing LLM().
+[project.entry-points."vllm.general_plugins"]
+evo2_flash = "evo2_flash:register"
+
+[tool.setuptools]
+packages = ["evo2_flash"]
+
+[tool.setuptools.package-data]
+# evo2's vortex config ymls (Apache-2.0), used to convert checkpoints on first use.
+evo2_flash = ["evo2_configs/*.yml"]

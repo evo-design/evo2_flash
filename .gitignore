@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Model weights and converted checkpoints
+ckpt/
+*.pt
+*.pth
+*.safetensors
+*.bin
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
