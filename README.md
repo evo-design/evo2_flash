@@ -1,15 +1,6 @@
 # evo2_flash
 
-Evo 2 (StripedHyena2) on vLLM, with a drop-in replacement for `evo2.Evo2`. vLLM has no
-upstream support for the architecture, so this is an out-of-tree plugin. The three Hyena
-mixer variants subclass `MambaBase`, keep their state in vLLM's paged cache, and run as
-the custom op `vllm::evo2_hyena_mixer`. vLLM itself is never patched.
-
-This package is the runtime part of
-[AlexYkHao/evo2-vllm](https://github.com/AlexYkHao/evo2-vllm) at `5d6396e`. The tests,
-benchmarks, scripts, design record and reference implementation stay in that repository.
-Code comments that cite `tests/`, `scripts/`, `evo2_layers/`, `PLAN.md` or other docs
-refer to it.
+Evo 2 (StripedHyena2) on vLLM, with a drop-in replacement for `evo2.Evo2`. Evo2_flash supports more accessible genomic ICL across diverse biological systems.
 
 ## Requirements and install
 
@@ -64,83 +55,6 @@ bytes(outs[0].outputs[0].token_ids).decode("ascii", "replace")
 `Evo2` uses. On a GPU without FP8 tensor cores, pass the checkpoint through
 `evo2_flash.api.checkpoint_for_this_gpu(path)` first. `Evo2` does this itself, but a
 plain `LLM` does not.
-
-## Options
-
-| `Evo2(...)` argument | effect |
-|---|---|
-| `kv_cache_dtype="fp8"` | 2x KV capacity. Lossy: moves the upstream gate by 1.2-1.8e-3 (7B/20B/40B) |
-| `quantization="fp8"` (engine override) | fp8 weights: 2.2e-3 (40B) / 2.95e-3 (7B) on the gate; fits 40B on one 80 GB GPU |
-| `speculative=<head dir>` | a trained EAGLE/EAGLE-3 draft head, K=3, probabilistic drafting: 1.3-1.7x at 7B, 1.3-2.0x at 20B |
-| `cfg=True` | installs the classifier-free-guidance logits processor, enabling `generate(..., guidance=w)` |
-| `max_model_len`, `gpu_memory_utilization` (0.85), `cache_dir` | engine sizing and the checkpoint cache |
-
-Classifier-free guidance computes `guided = l_cond + w * (l_cond - l_base)`. The baseline
-is `baseline_prompt` (`cfg_type="uncond"`) or `negative_prompts[i]` (`cfg_type="negative"`),
-and `dna_only=True` restricts sampling to A/C/G/T. CFG and speculative decoding are mutually
-exclusive, because vLLM rejects custom logits processors under speculation.
-
-fp8-surgery checkpoints run without fp8 GEMMs. In these checkpoints block 0 is served
-from an exact token table, and optionally some Hyena layers emulate Hopper fp8
-accumulation (`hyena_token_table_layers`, `hyena_fp8_emulated_layers`,
-`hyena_fp8_emulated_channels` in the config). They load like any other converted
-checkpoint. The 1B's table variant is built by
-`evo2_flash.convert.build_token_table_checkpoint`; the others come from
-`scripts/fp8_surgery.py` in the source repository.
-
-Other `vllm.LLM` arguments pass through with a warning. `dtype`, `tokenizer`,
-`skip_tokenizer_init` and `model` cannot be overridden.
-
-## GPUs without FP8 tensor cores
-
-On sm < 8.9 (A100, RTX 3090, A40), vLLM serves the fp8 in_proj as weight-only Marlin.
-That works for the 7B, which scores 2.5-3.8e-4 on the gate on an A100 and an RTX 3090.
-The stock 1B, however, depends on Hopper's FP8 rounding in block 0 and loses all signal
-there: gate loss 0.805 against the authors' 0.502. `Evo2(...)` handles this through
-`checkpoint_for_this_gpu`:
-
-- **1B:** swapped for its FP8-surgery token-table variant, built once into the
-  checkpoint cache (about 20 s). Through vLLM it passes the strict gate at 4.27e-4.
-- **20B and 40B:** raise with instructions, because their fix is not a one-step build.
-- **every 7B, and any surgery checkpoint:** used unchanged, as on sm_89+.
-
-`EVO2_FP8_FALLBACK=off` keeps the stock checkpoint (diagnostics). On 24 GB cards such
-as the L4, CFG sizes its admission waves to what the KV cache holds.
-
-## Checkpoints
-
-`Evo2("evo2_7b")` looks for `$EVO2_VLLM_CACHE/evo2_7b_hf`, defaulting to
-`$HF_HOME/evo2_vllm`. If that directory is missing, it finds the vortex `.pt` the way evo2
-does, downloading the HF snapshot if absent, and converts it once with
-`evo2_flash.convert.convert_checkpoint`. The vortex configs ship in
-`evo2_flash/evo2_configs/`, so evo2 and vortex need not be installed. 40B's `.pt.part0/.part1`
-shards are read in place.
-
-You can also pass a converted directory, `Evo2("/path/to/evo2_7b_hf")`, or a finetuned
-vortex `.pt`, `Evo2("evo2_7b", local_path="ft.pt")`. Checkpoints converted by
-`vllm_evo2` load unchanged.
-
-Names: `evo2_7b`, `evo2_7b_262k`, `evo2_7b_base`, `evo2_7b_microviridae`, `evo2_1b_base`,
-`evo2_20b`, `evo2_40b`, `evo2_40b_base` (`evo2_flash.MODEL_NAMES`).
-
-## Validation
-
-Measured with the source repository's suite on one GPU. "Gate" is `evo2/test/test_evo2.py`
-reproduced through vLLM: mean NLL over the authors' sequences against their stored value,
-eps 1e-3.
-
-| model | GPU | gate Δ | generation test (authors' protocol) |
-|---|---|---|---|
-| evo2_1b_base | H100/H200 | 4.51e-4 | pass |
-| evo2_7b | H100/H200 | 4.98e-4 | pass (89.4 vs 89.25) |
-| evo2_7b_base | H200 | 9.66e-4 | n/a |
-| evo2_20b | H100/H200 | 1.77e-4 | pass |
-| evo2_40b | H200 | 6.69e-5 | pass |
-| evo2_40b_base | H200 | 3.14e-4 | n/a |
-
-The engine also passes a 24-configuration decode-consistency matrix on 1B/7B/20B/40B. It
-covers batching, chunked prefill, prefix-cache hits, preemption, fp8 KV, async
-scheduling and speculative decoding.
 
 ## Drop-in replacement for evo2.Evo2
 
@@ -197,13 +111,69 @@ The following names raise `ValueError`:
 - rotary, inner-attention and HyenaCascade internals
 - a Hyena name used on an attention block, and the reverse
 
+
+## Options
+
+| `Evo2(...)` argument | effect |
+|---|---|
+| `kv_cache_dtype="fp8"` | 2x KV capacity. Lossy: moves the upstream gate by 1.2-1.8e-3 (7B/20B/40B) |
+| `quantization="fp8"` (engine override) | fp8 weights: 2.2e-3 (40B) / 2.95e-3 (7B) on the gate; fits 40B on one 80 GB GPU |
+| `speculative=<head dir>` | a trained EAGLE/EAGLE-3 draft head, K=3, probabilistic drafting: 1.3-1.7x at 7B, 1.3-2.0x at 20B |
+| `cfg=True` | installs the classifier-free-guidance logits processor, enabling `generate(..., guidance=w)` |
+| `max_model_len`, `gpu_memory_utilization` (0.85), `cache_dir` | engine sizing and the checkpoint cache |
+
+Classifier-free guidance computes `guided = l_cond + w * (l_cond - l_base)`. The baseline
+is `baseline_prompt` (`cfg_type="uncond"`) or `negative_prompts[i]` (`cfg_type="negative"`),
+and `dna_only=True` restricts sampling to A/C/G/T. CFG and speculative decoding are mutually
+exclusive, because vLLM rejects custom logits processors under speculation.
+
+fp8-surgery checkpoints run without fp8 GEMMs. In these checkpoints block 0 is served
+from an exact token table, and optionally some Hyena layers emulate Hopper fp8
+accumulation (`hyena_token_table_layers`, `hyena_fp8_emulated_layers`,
+`hyena_fp8_emulated_channels` in the config). They load like any other converted
+checkpoint. The 1B's table variant is built by
+`evo2_flash.convert.build_token_table_checkpoint`; the others come from
+`scripts/fp8_surgery.py` in the source repository.
+
+Other `vllm.LLM` arguments pass through with a warning. `dtype`, `tokenizer`,
+`skip_tokenizer_init` and `model` cannot be overridden.
+
+## Checkpoints
+
+`Evo2("evo2_7b")` looks for `$EVO2_VLLM_CACHE/evo2_7b_hf`, defaulting to
+`$HF_HOME/evo2_vllm`. If that directory is missing, it finds the vortex `.pt` the way evo2
+does, downloading the HF snapshot if absent, and converts it once with
+`evo2_flash.convert.convert_checkpoint`. The vortex configs ship in
+`evo2_flash/evo2_configs/`, so evo2 and vortex need not be installed. 40B's `.pt.part0/.part1`
+shards are read in place.
+
+You can also pass a converted directory, `Evo2("/path/to/evo2_7b_hf")`, or a finetuned
+vortex `.pt`, `Evo2("evo2_7b", local_path="ft.pt")`. Checkpoints converted by
+`vllm_evo2` load unchanged.
+
+Names: `evo2_7b`, `evo2_7b_262k`, `evo2_7b_base`, `evo2_7b_microviridae`, `evo2_1b_base`,
+`evo2_20b`, `evo2_40b`, `evo2_40b_base` (`evo2_flash.MODEL_NAMES`).
+
+## GPUs without FP8 tensor cores
+
+On sm < 8.9 (A100, RTX 3090, A40), vLLM serves the fp8 in_proj as weight-only Marlin.
+That works for the 7B, which scores 2.5-3.8e-4 on the gate on an A100 and an RTX 3090.
+The stock 1B, however, depends on Hopper's FP8 rounding in block 0 and loses all signal
+there: gate loss 0.805 against the authors' 0.502. `Evo2(...)` handles this through
+`checkpoint_for_this_gpu`:
+
+- **1B:** swapped for its FP8-surgery token-table variant, built once into the
+  checkpoint cache (about 20 s). Through vLLM it passes the strict gate at 4.27e-4.
+- **20B and 40B:** raise with instructions, because their fix is not a one-step build.
+- **every 7B, and any surgery checkpoint:** used unchanged, as on sm_89+.
+
+`EVO2_FP8_FALLBACK=off` keeps the stock checkpoint (diagnostics). On 24 GB cards such
+as the L4, CFG sizes its admission waves to what the KV cache holds.
+
 ## Limitations
 
 - One GPU per model. Tensor parallelism is not supported, because Hyena channels are
   interleaved per triple, and pipeline parallelism is not supported either.
-- vLLM's Triton `causal_conv1d` supports widths 2-5 only, so the inner Hyena filters
-  (K=7/128) run on this package's own kernels: `triton_prefill.py`, `triton_decode.py`
-  and `triton_verifier.py`.
 - Trained draft heads exist for 7B and 20B only.
 
 ## Third-party code
