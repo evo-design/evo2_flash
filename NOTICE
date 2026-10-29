@@ -1,0 +1,6 @@
+evo2_flash
+
+This product includes the Evo 2 model configuration files in
+evo2_flash/evo2_configs/, taken unchanged from the evo2 package
+(https://github.com/ArcInstitute/evo2), which is licensed under the
+Apache License, Version 2.0.

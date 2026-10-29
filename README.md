@@ -13,7 +13,11 @@ Evo 2 (StripedHyena2) on vLLM, with a drop-in replacement for `evo2.Evo2`. Evo2_
   or fp8 weights on an H100.
 
 ```bash
-pip install -e .        # registers the plugin via the vllm.general_plugins entry point
+# vLLM 0.26.0, CUDA 12.9 build: runs on CUDA 12 and CUDA 13 drivers.
+# (PyPI's default vllm build is CUDA 13 and cannot use the GPU on a CUDA 12 driver.)
+pip install "https://github.com/vllm-project/vllm/releases/download/v0.26.0/vllm-0.26.0+cu129-cp38-abi3-manylinux_2_28_x86_64.whl" \
+    --extra-index-url https://download.pytorch.org/whl/cu129
+pip install evo2-flash   # registers the plugin via the vllm.general_plugins entry point
 export VLLM_ENABLE_V1_MULTIPROCESSING=0   # Evo2 sets this itself; the API needs the engine in-process
 ```
 
@@ -39,7 +43,7 @@ checkpoint is converted. `--local_path` points it at a converted directory, and
 # from evo2 import Evo2
 from evo2_flash import Evo2
 
-model = Evo2("evo2_7b")                     # any evo2 name; converted on first use
+model = Evo2("evo2_7b")
 scores = model.score_sequences(seqs)        # mean log-likelihood per sequence
 out = model.generate(prompts, n_tokens=500, temperature=1.0, top_k=4)
 out.sequences, out.logprobs_mean
@@ -176,9 +180,12 @@ The stock 1B, however, depends on Hopper's FP8 rounding in block 0 and loses all
 there: gate loss 0.805 against the authors' 0.502. `Evo2(...)` handles this through
 `checkpoint_for_this_gpu`:
 
-- **1B:** swapped for its FP8-surgery token-table variant, built once into the
-  checkpoint cache (about 20 s). Through vLLM it passes the strict gate at 4.27e-4.
-- **20B and 40B:** raise with instructions, because their fix is not a one-step build.
+- **1B and 20B:** the published checkpoints carry a `surgery/` sidecar. On these GPUs
+  `Evo2(...)` builds the FP8-free form from it once into the checkpoint cache, and it
+  passes the strict gate. `fp8_mode="surgery"` forces that form on any GPU.
+- **A 1B converted locally** (no sidecar): swapped for its token-table variant, built
+  once (about 20 s).
+- **A 20B without a sidecar, and the 40B:** raise with instructions.
 - **every 7B, and any surgery checkpoint:** used unchanged, as on sm_89+.
 
 `EVO2_FP8_FALLBACK=off` keeps the stock checkpoint (diagnostics). On 24 GB cards such

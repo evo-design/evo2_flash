@@ -72,6 +72,17 @@ HF_MODEL_NAME_MAP = {
     "evo2_7b_microviridae": "evo-design/evo-2-7b-8k-microviridae",
 }
 MODEL_NAMES = list(HF_MODEL_NAME_MAP)
+# Published converted checkpoints: one per model, running on any GPU (the 1B and
+# 20B carry a surgery/ sidecar for GPUs without FP8 tensor cores; surgery.py).
+PUBLISHED_CHECKPOINTS = {
+    "evo2_20b": "gbrixi/evo2_20b_vllm",
+    "evo2_7b": "gbrixi/evo2_7b_vllm",
+    "evo2_7b_base": "gbrixi/evo2_7b_base_vllm",
+    "evo2_7b_262k": "gbrixi/evo2_7b_262k_vllm",
+    "evo2_1b_base": "gbrixi/evo2_1b_base_vllm",
+    "evo2_7b_microviridae": "gbrixi/evo2_7b_microviridae_vllm",
+}
+PUBLISHED_PATTERNS = ["config.json", "model.safetensors", "metadata/*", "surgery/*"]
 VENDORED_CONFIGS = Path(__file__).resolve().parent / "evo2_configs"
 
 FP8_FORMAT = "e4m3fn"

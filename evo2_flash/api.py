@@ -35,6 +35,8 @@ import numpy as np
 import torch
 
 from .convert import (
+    PUBLISHED_CHECKPOINTS,
+    PUBLISHED_PATTERNS,
     CONFIG_MAP,
     FP8_BLOCK0_SENSITIVE,
     HF_MODEL_NAME_MAP,
@@ -264,9 +266,10 @@ def resolve_checkpoint(model_name: str, local_path: str | None = None,
       used as is.
     - `local_path` a vortex `.pt` (evo2's meaning): converted once into the cache
       with the config of `model_name`.
-    - otherwise `model_name` must be an evo2 name; `{cache}/{model_name}_hf` is
-      used, converted from the HuggingFace snapshot (downloaded like evo2 does)
-      if missing.
+    - otherwise `model_name` must be an evo2 name: its published converted
+      checkpoint (PUBLISHED_CHECKPOINTS) is downloaded; for a model without one,
+      `{cache}/{model_name}_hf` is converted from the vortex checkpoint
+      (downloaded like evo2 does) if missing.
     """
     if local_path is None and _is_converted(model_name):
         return model_name
@@ -289,6 +292,15 @@ def resolve_checkpoint(model_name: str, local_path: str | None = None,
         out = os.path.join(cache, f"{stem}-{tag}_hf")
         src = local_path
     else:
+        if download and model_name in PUBLISHED_CHECKPOINTS:
+            from huggingface_hub import snapshot_download
+
+            path = snapshot_download(repo_id=PUBLISHED_CHECKPOINTS[model_name],
+                                     allow_patterns=PUBLISHED_PATTERNS)
+            if not _is_converted(path):
+                raise RuntimeError(f"{PUBLISHED_CHECKPOINTS[model_name]} is not a converted "
+                                   "checkpoint (config.json model_type != striped_hyena2)")
+            return path
         out = os.path.join(cache, f"{model_name}_hf")
         src = None
     if _is_converted(out):
@@ -300,7 +312,8 @@ def resolve_checkpoint(model_name: str, local_path: str | None = None,
     return out
 
 
-def checkpoint_for_this_gpu(path: str, cache_dir: str | None = None, log=print) -> str:
+def checkpoint_for_this_gpu(path: str, cache_dir: str | None = None, log=print,
+                            fp8_mode: str = "auto") -> str:
     """The checkpoint this GPU runs correctly: `path`, or its FP8-surgery variant.
 
     The released 1B, 20B and 40B depend on Hopper's FP8 rounding in block 0
@@ -309,19 +322,35 @@ def checkpoint_for_this_gpu(path: str, cache_dir: str | None = None, log=print) 
     ln 4 there: 0.805 for the stock 1B on an A100 and an RTX 3090
     (docs/GCP_GPU_MATRIX.md on branch ops/gcp-gpu-matrix). On such a GPU:
 
-    - the 1B is swapped for its token-table variant, built once into the cache
-      (about 20 s; strict gate 6.6e-4);
+    - a checkpoint with a `surgery/` sidecar (the published 1B and 20B; surgery.py)
+      uses its FP8-free form, built once into the cache;
+    - otherwise the 1B is swapped for its token-table variant, built once into the
+      cache (about 20 s; strict gate 6.6e-4);
     - the 20B and 40B raise, since their fix is not a one-step build;
     - everything else, including every 7B and any surgery checkpoint, is
       returned unchanged, as on sm >= 8.9.
 
-    `EVO2_FP8_FALLBACK=off` returns `path` unchanged on any GPU (diagnostics).
+    `fp8_mode="surgery"` uses the sidecar's FP8-free form on any GPU (to validate it
+    on Hopper). `EVO2_FP8_FALLBACK=off` returns `path` unchanged on any GPU
+    (diagnostics).
     """
+    from . import surgery
+
+    if fp8_mode not in ("auto", "surgery"):
+        raise ValueError(f'fp8_mode must be "auto" or "surgery", got {fp8_mode!r}')
+    if fp8_mode == "surgery":
+        if not surgery.has_sidecar(path):
+            raise ValueError(f'fp8_mode="surgery": {path} has no {surgery.SIDECAR_DIR}/ sidecar')
+        return surgery.materialize_cached(path, cache_dir or default_cache_dir(), log=log)
     if os.environ.get("EVO2_FP8_FALLBACK", "auto") == "off" or not torch.cuda.is_available():
         return path
     cc = torch.cuda.get_device_capability()
     if cc >= (8, 9):
         return path
+    if surgery.has_sidecar(path):
+        log(f"[evo2_flash] {torch.cuda.get_device_name()} has no FP8 tensor cores; using "
+            "this checkpoint's FP8-free form")
+        return surgery.materialize_cached(path, cache_dir or default_cache_dir(), log=log)
     with open(os.path.join(path, "config.json")) as f:
         cfg = json.load(f)
     fix = FP8_BLOCK0_SENSITIVE.get(cfg.get("_source_config"))
@@ -474,6 +503,8 @@ class Evo2:
             unused, since the processor is a no-op for requests without a
             CfgSpec.
         cache_dir: where converted checkpoints live (default `default_cache_dir()`).
+        fp8_mode: "auto" (default): FP8 weights on sm_89+, the checkpoint's
+            FP8-free form below that; "surgery": the FP8-free form on any GPU.
         **engine_overrides: passed to `vllm.LLM` (warns outside the validated set).
 
     Attributes: `tokenizer` (CharLevelTokenizer), `llm` (the `vllm.LLM`),
@@ -486,9 +517,10 @@ class Evo2:
                  gpu_memory_utilization: float = DEFAULT_GPU_MEMORY_UTILIZATION,
                  kv_cache_dtype: str = "auto", speculative: str | None = None,
                  cfg: bool = False, cache_dir: str | None = None,
-                 **engine_overrides):
+                 fp8_mode: str = "auto", **engine_overrides):
         self.checkpoint = checkpoint_for_this_gpu(
-            resolve_checkpoint(model_name, local_path, cache_dir), cache_dir)
+            resolve_checkpoint(model_name, local_path, cache_dir), cache_dir,
+            fp8_mode=fp8_mode)
         self.model_name = model_name
         self.tokenizer = CharLevelTokenizer(512)
 
